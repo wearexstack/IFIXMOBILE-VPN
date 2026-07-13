@@ -1,0 +1,6 @@
+{
+  "name": "IFIXMOBILE VPN",
+  "description": "IFIXMOBILE VPN is a modern, high-speed, secure Android VPN client featuring premium glassmorphism design, Persian language, and server selection.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
