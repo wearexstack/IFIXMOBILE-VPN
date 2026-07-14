@@ -1,3 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">IFIXMOBILE VPN</string>
+    <string name="connected">Connected</string>
+    <string name="disconnected">Disconnected</string>
+    <string name="connecting">Connecting...</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="connect">Connect</string>
+    <string name="select_server">Select Server</string>
+    <string name="available_servers">Available Servers</string>
+    <string name="latency">Latency</string>
+    <string name="load">Load</string>
 </resources>
