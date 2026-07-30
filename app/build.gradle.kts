@@ -21,8 +21,8 @@ android {
     applicationId = "com.ifixmobile.vpn"
     minSdk = 24
     targetSdk = 36
-    versionCode = 2
-    versionName = "1.1.0"
+    versionCode = 3
+    versionName = "1.2.0-xray"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -60,6 +60,11 @@ android {
   buildFeatures {
     compose = true
     buildConfig = true
+  }
+  packaging {
+    jniLibs {
+      useLegacyPackaging = true
+    }
   }
   testOptions {
     unitTests {
@@ -103,6 +108,13 @@ dependencies {
   implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
   implementation(libs.retrofit)
+
+  val libDir = file("libs")
+  if (libDir.isDirectory) {
+    libDir.listFiles()?.filter { it.isFile && it.name.endsWith(".aar") }.orEmpty()
+      .forEach { implementation(files(it)) }
+  }
+
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
