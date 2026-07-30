@@ -1,9 +1,13 @@
 package com.example
 
+import android.app.Activity
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
@@ -19,7 +23,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -37,14 +40,35 @@ import com.example.ui.viewmodel.VpnViewModel
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+
+    private val vpnViewModel: VpnViewModel by viewModels()
+
+    private val vpnPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        vpnViewModel.onVpnPermissionResult(result.resultCode == Activity.RESULT_OK)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
             MyApplicationTheme {
-                val vpnViewModel: VpnViewModel = viewModel()
                 val currentUser by vpnViewModel.currentUser.collectAsState()
                 val sessionReady by vpnViewModel.sessionReady.collectAsState()
+                val vpnPermissionIntent by vpnViewModel.vpnPermissionIntent.collectAsState()
+                val lastError by vpnViewModel.lastError.collectAsState()
+
+                LaunchedEffect(vpnPermissionIntent) {
+                    vpnPermissionIntent?.let { vpnPermissionLauncher.launch(it) }
+                }
+
+                LaunchedEffect(lastError) {
+                    lastError?.let {
+                        Toast.makeText(this@MainActivity, it, Toast.LENGTH_LONG).show()
+                        vpnViewModel.clearError()
+                    }
+                }
 
                 val navController = rememberNavController()
                 val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -53,7 +77,6 @@ class MainActivity : ComponentActivity() {
                 val navBackStackEntry by navController.currentBackStackEntryAsState()
                 val currentRoute = navBackStackEntry?.destination?.route ?: Screen.Login.route
 
-                // After session restore, skip login if already authenticated
                 LaunchedEffect(sessionReady, currentUser?.id) {
                     if (!sessionReady) return@LaunchedEffect
                     if (currentUser != null && currentUser!!.isActive) {
@@ -106,11 +129,7 @@ class MainActivity : ComponentActivity() {
                                 navController = navController,
                                 startDestination = if (
                                     currentUser != null && currentUser!!.isActive
-                                ) {
-                                    Screen.Home.route
-                                } else {
-                                    Screen.Login.route
-                                },
+                                ) Screen.Home.route else Screen.Login.route,
                                 modifier = Modifier.fillMaxSize()
                             ) {
                                 composable(Screen.Login.route) {
@@ -123,33 +142,27 @@ class MainActivity : ComponentActivity() {
                                         }
                                     )
                                 }
-
                                 composable(Screen.Home.route) {
                                     HomeScreen(
                                         viewModel = vpnViewModel,
-                                        onOpenDrawer = {
-                                            scope.launch { drawerState.open() }
-                                        },
+                                        onOpenDrawer = { scope.launch { drawerState.open() } },
                                         onNavigateToServers = {
                                             navController.navigate(Screen.ServerSelection.route)
                                         }
                                     )
                                 }
-
                                 composable(Screen.ServerSelection.route) {
                                     ServerSelectionScreen(
                                         viewModel = vpnViewModel,
                                         onBack = { navController.popBackStack() }
                                     )
                                 }
-
                                 composable(Screen.Settings.route) {
                                     SettingsScreen(
                                         viewModel = vpnViewModel,
                                         onBack = { navController.popBackStack() }
                                     )
                                 }
-
                                 composable(Screen.AdminPanel.route) {
                                     AdminPanelScreen(
                                         viewModel = vpnViewModel,
