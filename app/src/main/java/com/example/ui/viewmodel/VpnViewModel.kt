@@ -1,7 +1,9 @@
 package com.example.ui.viewmodel
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.SessionStore
 import com.example.data.model.User
 import com.example.data.model.VpnServer
 import com.example.data.repository.MockVpnRepository
@@ -13,9 +15,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
-class VpnViewModel : ViewModel() {
+class VpnViewModel(application: Application) : AndroidViewModel(application) {
 
-    // Repository delegates
+    private val sessionStore = SessionStore(application)
+
     val servers = MockVpnRepository.servers
     val users = MockVpnRepository.users
     val connectionState = MockVpnRepository.connectionState
@@ -26,34 +29,32 @@ class VpnViewModel : ViewModel() {
     val currentIpAddress = MockVpnRepository.currentIpAddress
     val currentUser = MockVpnRepository.currentUser
 
-    // App general configurations
     val isAutoConnect = MockVpnRepository.isAutoConnect
     val isNotificationEnabled = MockVpnRepository.isNotificationEnabled
     val isDarkTheme = MockVpnRepository.isDarkTheme
 
-    // Local UI states
     private val _loginError = MutableStateFlow<String?>(null)
     val loginError: StateFlow<String?> = _loginError.asStateFlow()
 
     private val _isAuthenticating = MutableStateFlow(false)
     val isAuthenticating: StateFlow<Boolean> = _isAuthenticating.asStateFlow()
 
-    // Server selection filters
+    /** True after trying to restore SharedPreferences session. */
+    private val _sessionReady = MutableStateFlow(false)
+    val sessionReady: StateFlow<Boolean> = _sessionReady.asStateFlow()
+
     private val _serverSearchQuery = MutableStateFlow("")
     val serverSearchQuery: StateFlow<String> = _serverSearchQuery.asStateFlow()
 
     private val _serverFilterFavorite = MutableStateFlow(false)
     val serverFilterFavorite: StateFlow<Boolean> = _serverFilterFavorite.asStateFlow()
 
-    // Admin user metrics & search
     private val _adminUserSearchQuery = MutableStateFlow("")
     val adminUserSearchQuery: StateFlow<String> = _adminUserSearchQuery.asStateFlow()
 
-    // Timer Job for connection telemetry
     private var telemetryJob: Job? = null
 
     init {
-        // Observe connection state changes to launch/cancel speed update loops
         viewModelScope.launch {
             connectionState.collect { state ->
                 if (state == VpnConnectionState.CONNECTED) {
@@ -61,6 +62,27 @@ class VpnViewModel : ViewModel() {
                 } else {
                     stopTelemetryLoop()
                 }
+            }
+        }
+        restoreSession()
+    }
+
+    private fun restoreSession() {
+        viewModelScope.launch {
+            try {
+                if (sessionStore.isRemembered()) {
+                    val u = sessionStore.username()
+                    val p = sessionStore.password()
+                    if (!u.isNullOrBlank() && !p.isNullOrBlank()) {
+                        val user = MockVpnRepository.login(u, p)
+                        if (user == null || !user.isActive) {
+                            sessionStore.clear()
+                            MockVpnRepository.logout()
+                        }
+                    }
+                }
+            } finally {
+                _sessionReady.value = true
             }
         }
     }
@@ -80,8 +102,12 @@ class VpnViewModel : ViewModel() {
         telemetryJob = null
     }
 
-    // Authentication Actions
-    fun handleLogin(username: String, passwordHash: String, rememberMe: Boolean, onSuccess: () -> Unit) {
+    fun handleLogin(
+        username: String,
+        passwordHash: String,
+        rememberMe: Boolean,
+        onSuccess: () -> Unit
+    ) {
         if (username.isBlank() || passwordHash.isBlank()) {
             _loginError.value = "لطفاً نام کاربری و رمز عبور را وارد کنید"
             return
@@ -90,13 +116,18 @@ class VpnViewModel : ViewModel() {
         viewModelScope.launch {
             _isAuthenticating.value = true
             _loginError.value = null
-            delay(1200) // Simulating network lag
-            
-            val user = MockVpnRepository.login(username, passwordHash)
+            delay(800)
+
+            val user = MockVpnRepository.login(username.trim(), passwordHash)
             _isAuthenticating.value = false
-            
+
             if (user != null) {
                 if (user.isActive) {
+                    if (rememberMe) {
+                        sessionStore.saveSession(username.trim(), passwordHash)
+                    } else {
+                        sessionStore.clear()
+                    }
                     onSuccess()
                 } else {
                     _loginError.value = "این حساب کاربری غیرفعال یا منقضی شده است"
@@ -109,11 +140,11 @@ class VpnViewModel : ViewModel() {
     }
 
     fun handleLogout(onLogoutComplete: () -> Unit) {
+        sessionStore.clear()
         MockVpnRepository.logout()
         onLogoutComplete()
     }
 
-    // Connection Actions
     fun toggleConnection() {
         viewModelScope.launch {
             if (connectionState.value == VpnConnectionState.CONNECTED) {
@@ -124,7 +155,6 @@ class VpnViewModel : ViewModel() {
         }
     }
 
-    // Server Selection
     fun selectServer(server: VpnServer) {
         MockVpnRepository.selectServer(server)
     }
@@ -141,7 +171,6 @@ class VpnViewModel : ViewModel() {
         _serverFilterFavorite.value = !_serverFilterFavorite.value
     }
 
-    // Settings Toggle
     fun toggleAutoConnect() {
         isAutoConnect.value = !isAutoConnect.value
     }
@@ -154,7 +183,6 @@ class VpnViewModel : ViewModel() {
         isDarkTheme.value = !isDarkTheme.value
     }
 
-    // Admin Panel Actions
     fun setAdminUserSearchQuery(query: String) {
         _adminUserSearchQuery.value = query
     }
@@ -172,7 +200,15 @@ class VpnViewModel : ViewModel() {
         MockVpnRepository.toggleUserStatus(userId)
     }
 
-    fun addNewServer(country: String, flag: String, city: String, ip: String, ping: Int, load: Int, premium: Boolean): Boolean {
+    fun addNewServer(
+        country: String,
+        flag: String,
+        city: String,
+        ip: String,
+        ping: Int,
+        load: Int,
+        premium: Boolean
+    ): Boolean {
         if (country.isBlank() || city.isBlank() || ip.isBlank()) return false
         return MockVpnRepository.addServer(country, flag, city, ip, ping, load, premium)
     }
@@ -181,17 +217,13 @@ class VpnViewModel : ViewModel() {
         MockVpnRepository.deleteServer(serverId)
     }
 
-    // Connection duration formatter (HH:MM:SS) in Persian Numbers
     fun getFormattedDuration(): String {
         val secondsTotal = connectionDuration.value
         val hours = secondsTotal / 3600
         val minutes = (secondsTotal % 3600) / 60
         val seconds = secondsTotal % 60
         val englishStr = String.format("%02d:%02d:%02d", hours, minutes, seconds)
-        
-        return with(MockVpnRepository) {
-            englishStr.toPersianNumbers()
-        }
+        return with(MockVpnRepository) { englishStr.toPersianNumbers() }
     }
 
     override fun onCleared() {
