@@ -1,6 +1,6 @@
 # IFIX Mobile VPN
 
-کلاینت اندروید فارسی با **تونل واقعی Xray** (libv2ray).
+کلاینت اندروید فارسی با **تونل واقعی Xray**.
 
 ## ورود دمو
 
@@ -9,26 +9,23 @@
 | ادمین | `admin` | `admin` |
 | کاربر | `taher` | `123456` |
 
-با تیک **«مرا به خاطر بسپار»** نشست ذخیره می‌شود.
+## هسته Xray
 
-## تونل Xray
+در **GitHub Actions** فایل `libv2ray.aar` به‌صورت خودکار از ریلیز رسمی دانلود و داخل APK قرار می‌گیرد.
 
-1. سرورها از ساب لود می‌شوند:  
-   `https://raw.githubusercontent.com/wearexstack/xstack/main/sub`
-2. اتصال از طریق `IfixVpnService` + `XrayEngine` + `StartLoop(config, tunFd)`
-3. **الزامی:** فایل `libv2ray.aar` را در `app/libs/` بگذارید (راهنما در همان پوشه).
-
-بدون AAR اپ بیلد می‌شود ولی پیام خطا می‌دهد که هسته موجود نیست.
-
-## ساخت APK
-
-```text
-Actions → IFIX Mobile VPN – Build APK → Artifact
-```
-
-یا:
+بیلد محلی:
 
 ```bash
-# بعد از قرار دادن libv2ray.aar
+bash scripts/download-libv2ray.sh
 gradle :app:assembleDebug
+```
+
+## ساب سرورها
+
+`https://raw.githubusercontent.com/wearexstack/xstack/main/sub`
+
+## APK
+
+```text
+Actions → IFIX Mobile VPN – Build APK → Artifact: IFIXMOBILE_VPN_Debug_APK
 ```

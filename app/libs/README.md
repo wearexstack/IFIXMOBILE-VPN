@@ -1,14 +1,11 @@
-# libv2ray.aar (الزامی برای تونل واقعی)
+# libv2ray.aar
 
-بدون این فایل اپ بیلد می‌شود ولی **پروکسی واقعی کار نمی‌کند**.
+**GitHub Actions downloads this automatically** before every build (~59 MB).
+
+Local:
 
 ```bash
-git clone https://github.com/2dust/AndroidLibXrayLite.git
-cd AndroidLibXrayLite
-gomobile init
-go mod tidy -v
-gomobile bind -v -androidapi 24 -trimpath -ldflags='-s -w -buildid= -checklinkname=0' ./
-cp libv2ray.aar /path/to/IFIXMOBILE-VPN/app/libs/
+bash scripts/download-libv2ray.sh
 ```
 
-سپس `gradle :app:assembleDebug`
+Source: https://github.com/2dust/AndroidLibXrayLite/releases/download/v26.7.28/libv2ray.aar
