@@ -9,11 +9,13 @@ import java.io.File
 import java.lang.reflect.Method
 import java.lang.reflect.Proxy
 
-/** Xray via AndroidLibXrayLite (libv2ray) – StartLoop(config, tunFd). */
 class XrayEngine(private val vpnService: VpnService) {
 
     companion object {
         private const val TAG = "XrayEngine"
+
+        @Volatile
+        private var envReady = false
 
         fun isAvailable(): Boolean = try {
             Class.forName("libv2ray.Libv2ray")
@@ -21,54 +23,127 @@ class XrayEngine(private val vpnService: VpnService) {
         } catch (_: Throwable) {
             false
         }
+
+        fun ensureEnv(context: Context): String? {
+            if (envReady) return null
+            return try {
+                try {
+                    val seq = Class.forName("go.Seq")
+                    seq.getMethod("setContext", Context::class.java)
+                        .invoke(null, context.applicationContext)
+                    Log.i(TAG, "go.Seq.setContext OK")
+                } catch (e: Throwable) {
+                    Log.w(TAG, "Seq.setContext skipped: ${e.message}")
+                }
+
+                val assetDir = File(context.filesDir, "xray").apply { mkdirs() }
+                File(assetDir, ".keep").writeText("1")
+
+                val lib = Class.forName("libv2ray.Libv2ray")
+                val init = findStatic(lib, listOf("InitCoreEnv", "initCoreEnv"), 2)
+                    ?: return "InitCoreEnv not found"
+                init.invoke(null, assetDir.absolutePath, "")
+                envReady = true
+                Log.i(TAG, "InitCoreEnv OK")
+                null
+            } catch (e: Throwable) {
+                val c = e.cause ?: e
+                Log.e(TAG, "ensureEnv failed", c)
+                c.message ?: c.javaClass.simpleName
+            }
+        }
+
+        private fun findStatic(clazz: Class<*>, names: List<String>, argc: Int): Method? {
+            for (name in names) {
+                for (m in clazz.methods) {
+                    if (m.name == name && m.parameterTypes.size == argc) return m
+                }
+            }
+            return null
+        }
     }
 
     private var controller: Any? = null
     private var tunPfd: ParcelFileDescriptor? = null
+    var lastError: String? = null
+        private set
 
     fun start(context: Context, xrayJson: String, sessionName: String): Boolean {
+        lastError = null
         if (!isAvailable()) {
-            Log.e(TAG, "libv2ray not on classpath")
+            lastError = "libv2ray.aar در APK نیست"
             return false
         }
-        val assetDir = File(context.filesDir, "xray").apply { mkdirs() }
-        File(assetDir, "config.json").writeText(xrayJson)
+        ensureEnv(context)?.let {
+            lastError = "InitCoreEnv: $it"
+            return false
+        }
 
         return try {
-            val lib = Class.forName("libv2ray.Libv2ray")
-            invokeStaticNamed(lib, listOf("InitCoreEnv", "initCoreEnv"), arrayOf(assetDir.absolutePath, ""))
-            Log.i(TAG, "InitCoreEnv OK")
+            File(context.filesDir, "xray/config.json").writeText(xrayJson)
 
-            val pfd = establishTun(sessionName) ?: return false.also { Log.e(TAG, "TUN failed") }
+            val pfd = establishTun(sessionName)
+            if (pfd == null) {
+                lastError = "ایجاد TUN ناموفق"
+                return false
+            }
             tunPfd = pfd
             val fd = pfd.fd
             Log.i(TAG, "TUN fd=$fd")
 
             val cbIface = Class.forName("libv2ray.CoreCallbackHandler")
-            val callback = Proxy.newProxyInstance(cbIface.classLoader, arrayOf(cbIface)) { _, method, args ->
+            val callback = Proxy.newProxyInstance(
+                cbIface.classLoader,
+                arrayOf(cbIface)
+            ) { _, method, args ->
                 when (method.name) {
-                    "Startup", "startup" -> 0.also { Log.i(TAG, "Startup") }
-                    "Shutdown", "shutdown" -> 0.also { Log.i(TAG, "Shutdown") }
-                    "OnEmitStatus", "onEmitStatus" -> 0.also {
+                    "Startup", "startup" -> 0L.also { Log.i(TAG, "Startup") }
+                    "Shutdown", "shutdown" -> 0L.also { Log.i(TAG, "Shutdown") }
+                    "OnEmitStatus", "onEmitStatus" -> 0L.also {
                         Log.i(TAG, "status ${args?.getOrNull(0)}: ${args?.getOrNull(1)}")
                     }
-                    else -> 0
+                    else -> when (method.returnType) {
+                        java.lang.Long.TYPE, Long::class.javaObjectType -> 0L
+                        Integer.TYPE, Int::class.javaObjectType -> 0
+                        else -> null
+                    }
                 }
             }
 
-            val ctrl = invokeStaticNamed(
-                lib, listOf("NewCoreController", "newCoreController"), arrayOf(callback)
-            ) ?: return false.also { Log.e(TAG, "NewCoreController null") }
+            val lib = Class.forName("libv2ray.Libv2ray")
+            val newCtrl = findStatic(lib, listOf("NewCoreController", "newCoreController"), 1)
+                ?: run {
+                    lastError = "NewCoreController not found"
+                    return false
+                }
+            val ctrl = newCtrl.invoke(null, callback) ?: run {
+                lastError = "NewCoreController null"
+                return false
+            }
             controller = ctrl
 
-            val result = invokeInstanceNamed(
-                ctrl, listOf("StartLoop", "startLoop"), arrayOf(xrayJson, Integer.valueOf(fd))
-            )
-            if (result is Throwable) throw result
+            val startLoop = findInstance(ctrl, listOf("StartLoop", "startLoop"), 2)
+                ?: run {
+                    lastError = "StartLoop not found"
+                    return false
+                }
+
+            try {
+                startLoop.invoke(ctrl, xrayJson, fd)
+            } catch (e: Exception) {
+                val c = e.cause ?: e
+                lastError = "StartLoop: ${c.message ?: c.javaClass.simpleName}"
+                Log.e(TAG, "StartLoop threw", c)
+                stop()
+                return false
+            }
+
             Log.i(TAG, "StartLoop OK")
             true
         } catch (e: Throwable) {
-            Log.e(TAG, "start failed: ${(e.cause ?: e).message}", e.cause ?: e)
+            val c = e.cause ?: e
+            lastError = c.message ?: c.javaClass.simpleName
+            Log.e(TAG, "start failed", c)
             stop()
             false
         }
@@ -83,18 +158,19 @@ class XrayEngine(private val vpnService: VpnService) {
             .addRoute("0.0.0.0", 0)
             .addDnsServer("8.8.8.8")
             .addDnsServer("1.1.1.1")
-            .setBlocking(false)
+            .setBlocking(true)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) b.setMetered(false)
         try { b.addDisallowedApplication(vpnService.packageName) } catch (_: Exception) {}
         b.establish()
     } catch (e: Exception) {
         Log.e(TAG, "establishTun", e)
+        lastError = "TUN: ${e.message}"
         null
     }
 
     fun stop() {
         try {
-            controller?.let { invokeInstanceNamed(it, listOf("StopLoop", "stopLoop"), emptyArray()) }
+            controller?.let { findInstance(it, listOf("StopLoop", "stopLoop"), 0)?.invoke(it) }
         } catch (e: Exception) {
             Log.w(TAG, "StopLoop: ${e.message}")
         }
@@ -103,52 +179,21 @@ class XrayEngine(private val vpnService: VpnService) {
         tunPfd = null
     }
 
-    private fun invokeStaticNamed(clazz: Class<*>, names: List<String>, args: Array<Any?>): Any? {
+    private fun findStatic(clazz: Class<*>, names: List<String>, argc: Int): Method? {
         for (name in names) {
             for (m in clazz.methods) {
-                if (m.name != name || m.parameterTypes.size != args.size) continue
-                return try {
-                    m.invoke(null, *coerceArgs(m, args))
-                } catch (e: Exception) {
-                    throw e.cause ?: e
-                }
+                if (m.name == name && m.parameterTypes.size == argc) return m
             }
         }
-        Log.w(TAG, "static not found: $names")
         return null
     }
 
-    private fun invokeInstanceNamed(target: Any, names: List<String>, args: Array<Any?>): Any? {
-        val clazz = target.javaClass
+    private fun findInstance(target: Any, names: List<String>, argc: Int): Method? {
         for (name in names) {
-            for (m in clazz.methods) {
-                if (m.name != name) continue
-                if (args.isEmpty() && m.parameterTypes.isEmpty()) {
-                    return m.invoke(target)
-                }
-                if (m.parameterTypes.size != args.size) continue
-                return try {
-                    m.invoke(target, *coerceArgs(m, args))
-                } catch (e: Exception) {
-                    throw e.cause ?: e
-                }
+            for (m in target.javaClass.methods) {
+                if (m.name == name && m.parameterTypes.size == argc) return m
             }
         }
-        Log.w(TAG, "instance not found: $names")
         return null
-    }
-
-    private fun coerceArgs(m: Method, args: Array<Any?>): Array<Any?> {
-        val types = m.parameterTypes
-        return Array(args.size) { i ->
-            val a = args[i]
-            val t = types[i]
-            when {
-                a == null -> null
-                t == Integer.TYPE || t == Int::class.javaObjectType -> (a as Number).toInt()
-                t == java.lang.Long.TYPE || t == Long::class.javaObjectType -> (a as Number).toLong()
-                else -> a
-            }
-        }
     }
 }
